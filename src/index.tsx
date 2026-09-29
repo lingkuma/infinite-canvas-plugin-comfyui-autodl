@@ -330,8 +330,9 @@ function assembleBody(preset: WorkflowPreset | undefined, meta: Record<string, u
             if (lastOverride) body.last_frame = lastOverride;
             else if (refs.images[1]) body.last_frame = refs.images[1];
         } else {
-            if (preset?.refImages) refs.images.forEach((url, index) => (body[`ref_image_${index}`] = url));
-            if (preset?.refAudios) refs.audios.forEach((url, index) => (body[`ref_audio_${index}`] = url));
+            // 未收录进预设表的新模型(自定义 ID/离线兜底):按通用编号提交参考素材
+            if (!preset || preset.refImages) refs.images.forEach((url, index) => (body[`ref_image_${index}`] = url));
+            if (!preset || preset.refAudios) refs.audios.forEach((url, index) => (body[`ref_audio_${index}`] = url));
         }
     }
 
@@ -398,7 +399,7 @@ async function collectRefsForRules(
     rules: Record<string, InputRule>,
     preset: WorkflowPreset | undefined,
     signal: AbortSignal,
-): Promise<{ images: string[]; audios: string[] }> {
+): Promise<{ images: string[]; audios: string[]; slots: Record<string, string> }> {
     // 无规则或首尾帧等预设特例 → 走旧的按类收集(返回原始 RefSource,由调用方统一转 data URL)
     if (!Object.keys(rules).length || preset?.firstLastFrame) {
         const legacy = collectRefs(ctx, meta);
@@ -406,7 +407,7 @@ async function collectRefsForRules(
         const audios: string[] = [];
         for (const ref of legacy.images) images.push(await refToDataUrl(ref, signal));
         for (const ref of legacy.audios) audios.push(await refToDataUrl(ref, signal));
-        return { images, audios };
+        return { images, audios, slots: {} };
     }
 
     // 槽位清单:规则里所有 image/audio 槽,按名称排序保证编号稳定
@@ -460,7 +461,9 @@ async function collectRefsForRules(
         if (!usedUrl.has(url)) body[`ref_image_${Object.keys(body).length}`] = url; // 理论不可达,防御性兜底
     }
     void preset;
-    return groupSlotsByKind(filled, body, rules);
+    // 槽位名→URL 映射:动态模式下由 runWorkflow 直接按槽位名并入请求体
+    // (不再依赖内置预设表的 refImages/refAudios 标记,新模型同样生效)
+    return { ...groupSlotsByKind(filled, body, rules), slots: { ...body } };
 }
 
 // 把已填槽位按 image/audio 归组返回,保持 runWorkflow/assembleBody 的既有签名
@@ -671,6 +674,15 @@ async function runWorkflow(ctx: CanvasNodeContext) {
         // @图片N/@音频N 只是描述时的指代标签,服务端不解析,提交前剥离
         const submitMeta = { ...meta, prompt: String(meta.prompt ?? "").replace(/@(?:图片|音频)\d+/g, " ").replace(/\s{2,}/g, " ").trim() };
         const body = assembleBody(preset, submitMeta, refs);
+        // 动态规则模式:素材按规则槽位名直接并入请求体(含 first_frame 等命名槽位)。
+        // 新模型不在内置预设表里,preset 为 undefined,assembleBody 不会写 ref_image_N,
+        // 必须在此兜底,否则连线/手填的参考图会被丢弃,校验报「缺少参考图」。
+        if (dynamic && Object.keys(refs.slots).length) {
+            for (const key of Object.keys(body)) {
+                if (GENERIC_SLOT_NAME.test(key)) delete body[key];
+            }
+            Object.assign(body, refs.slots);
+        }
         // 动态表单值(paramsDyn)按规则类型并入请求体:number/boolean 转型,其余字符串
         if (dynamic && meta.paramsDyn && typeof meta.paramsDyn === "object") {
             for (const [name, rawValue] of Object.entries(meta.paramsDyn as Record<string, string>)) {

@@ -68,7 +68,7 @@
 
 ## Agent 技能（直接调用 AutoDL）
 
-已抽取独立技能 `skills/autodl-comfyui-video`，包含完整的 AutoDL.Art ComfyUI 工作流说明和 Python 客户端。用户级副本位于 `C:\Users\birdy\.codex\skills\autodl-comfyui-video`，其他 Agent 可直接使用 `$autodl-comfyui-video`。
+已抽取独立技能 `skills/autodl-comfyui-video`，包含完整的 AutoDL.Art ComfyUI 工作流说明和 Python 客户端。用户级副本位于 `C:\Users\xxx\.codex\skills\autodl-comfyui-video`，其他 Agent 可直接使用 `$autodl-comfyui-video`。
 
 ```powershell
 $env:AUTODL_TOKEN = "<令牌管理中创建的 ComfyUI Token>"
