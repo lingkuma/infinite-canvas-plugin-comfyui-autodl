@@ -11,7 +11,7 @@ import type { PluginStorage } from "@infinite-canvas/plugin-sdk";
 
 const DEFAULT_API_BASE = "https://autodl.art";
 const POLL_INTERVAL_MS = 2000;
-const POLL_TIMEOUT_MS = 15 * 60 * 1000;
+const POLL_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_REF_IMAGES = 9; // ref_image_0..8
 const MAX_REF_AUDIOS = 3; // ref_audio_0..2
 
@@ -1732,7 +1732,7 @@ function WorkflowPanel({ ctx }: CanvasNodePanelProps) {
 export default definePlugin({
     id: "comfyui-autodl",
     name: "AutoDL ComfyUI 工作流",
-    version: "1.4.3",
+    version: "1.4.4",
     description: "调用 AutoDL.Art ComfyUI 工作流:内置 H3 文生/多图参考/首尾帧/对口型视频与 IndexTTS2 语音合成预设,参考素材从上游连线自动收集。",
     css: SPINNER_CSS,
     nodes: [
