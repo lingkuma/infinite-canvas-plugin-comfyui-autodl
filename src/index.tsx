@@ -806,7 +806,9 @@ function ui(ctx: CanvasNodeContext) {
         } satisfies CSSProperties,
         pill,
         area: { ...pill, height: "auto", padding: "8px 12px", borderRadius: 12, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 } satisfies CSSProperties,
-        prompt: { ...pill, height: "auto", padding: "8px 4px", borderRadius: 12, borderWidth: 0, minHeight: 88, fontSize: 13, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 } satisfies CSSProperties,
+        // contentEditable 输入框必须是块级流式布局:沿用 pill 的 display:flex 会把每段文本和每个
+        // chip 拆成独立 flex item,插入素材后提示词会被排成多列「列表」,且光标/点击区域错乱。
+        prompt: { ...pill, display: "block", alignItems: "initial", gap: 0, height: "auto", padding: "8px 4px", borderRadius: 12, borderWidth: 0, minHeight: 88, fontSize: 13, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 } satisfies CSSProperties,
         label: { display: "block", fontSize: 11, opacity: 0.55, margin: "10px 2px 4px" } satisfies CSSProperties,
         hint: { fontSize: 11, color: ctx.theme.node.placeholder, lineHeight: 1.5 } satisfies CSSProperties,
         danger: { fontSize: 11, color: "#ef4444", lineHeight: 1.5 } satisfies CSSProperties,
@@ -873,6 +875,79 @@ function serializeEditor(editor: HTMLElement): string {
     return result;
 }
 
+// chip 在文本里的占位长度:文本按字符数,chip 按标签长度,BR 按 1(与 serializeEditor 对齐)
+function fragmentLength(fragment: Node): number {
+    if (fragment.nodeType === Node.TEXT_NODE) return (fragment.textContent || "").length;
+    if (fragment instanceof HTMLElement) {
+        const label = fragment.dataset.refLabel;
+        if (label) return label.length;
+        if (fragment.tagName === "BR") return 1;
+    }
+    let total = 0;
+    fragment.childNodes.forEach((child) => {
+        total += fragmentLength(child);
+    });
+    return total;
+}
+
+/** 光标在编辑器纯文本里的字符偏移(chip 按标签长度计入)。 */
+function offsetOfRange(editor: HTMLElement, range: Range): number {
+    const probe = document.createRange();
+    probe.selectNodeContents(editor);
+    try {
+        probe.setEnd(range.startContainer, range.startOffset);
+    } catch {
+        return serializeEditor(editor).length;
+    }
+    return fragmentLength(probe.cloneContents());
+}
+
+/** 字符偏移 → 折叠光标;偏移落进 chip 时放到 chip 之后,越界则放末尾。 */
+function rangeAtOffset(editor: HTMLElement, offset: number): Range {
+    const range = document.createRange();
+    let remaining = Math.max(0, offset);
+    let placed = false;
+    const walk = (parent: Node) => {
+        parent.childNodes.forEach((child) => {
+            if (placed) return;
+            if (child.nodeType === Node.TEXT_NODE) {
+                const length = (child.textContent || "").length;
+                if (remaining <= length) {
+                    range.setStart(child, remaining);
+                    placed = true;
+                    return;
+                }
+                remaining -= length;
+                return;
+            }
+            if (!(child instanceof HTMLElement)) return;
+            const label = child.dataset.refLabel;
+            if (label) {
+                if (remaining <= label.length) {
+                    range.setStartAfter(child);
+                    placed = true;
+                    return;
+                }
+                remaining -= label.length;
+                return;
+            }
+            if (child.tagName === "BR") {
+                remaining -= 1;
+                return;
+            }
+            walk(child);
+        });
+    };
+    walk(editor);
+    if (!placed) {
+        range.selectNodeContents(editor);
+        range.collapse(false);
+    } else {
+        range.collapse(true);
+    }
+    return range;
+}
+
 function createChip(item: MentionItem, ctx: CanvasNodeContext, onPreview: (url: string) => void): HTMLElement {
     const wrapper = document.createElement("span");
     wrapper.contentEditable = "false";
@@ -884,9 +959,10 @@ function createChip(item: MentionItem, ctx: CanvasNodeContext, onPreview: (url: 
         img.draggable = false;
         img.style.cssText = "width:22px;height:22px;border-radius:6px;object-fit:cover;display:block;";
         wrapper.style.cssText = "display:inline-flex;width:22px;height:22px;overflow:hidden;border-radius:6px;vertical-align:middle;margin:0 1px;cursor:pointer;";
-        wrapper.title = `${item.token} · ${item.title}(点击预览)`;
+        wrapper.title = `${item.token} · ${item.title}(双击预览)`;
         wrapper.appendChild(img);
-        wrapper.addEventListener("click", (event) => {
+        // 只响应双击:单击要让位给光标定位,否则一点缩略图就弹全屏预览,提示词框像被「卡住」。
+        wrapper.addEventListener("dblclick", (event) => {
             event.preventDefault();
             event.stopPropagation();
             onPreview(item.url);
@@ -902,11 +978,13 @@ function createChip(item: MentionItem, ctx: CanvasNodeContext, onPreview: (url: 
     return wrapper;
 }
 
-function MentionPromptInput({ value, onChange, items, ctx, style, placeholder }: { value: string; onChange: (next: string) => void; items: MentionItem[]; ctx: CanvasNodeContext; style?: CSSProperties; placeholder?: string }) {
+function MentionPromptInput({ value, onChange, items, ctx, style, placeholder, inserter }: { value: string; onChange: (next: string) => void; items: MentionItem[]; ctx: CanvasNodeContext; style?: CSSProperties; placeholder?: string; inserter?: { current: ((token: string) => void) | null } }) {
     const wrapRef = useRef<HTMLDivElement | null>(null);
     const editorRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedRef = useRef(value);
     const composingRef = useRef(false);
+    // 最后一次落在编辑器内的光标偏移:失焦(点「引用素材」行)后仍能插回原位置
+    const caretOffsetRef = useRef<number | null>(null);
     const [menu, setMenu] = useState<{ query: string; left: number; top: number } | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -991,33 +1069,41 @@ function MentionPromptInput({ value, onChange, items, ctx, style, placeholder }:
 
     function insertChip(item: MentionItem) {
         const editor = editorRef.current;
-        const selection = window.getSelection();
         if (!editor) return;
+        // 失焦时先聚焦,否则设置的光标会被浏览器丢弃,后续输入也没落点
+        editor.focus({ preventScroll: true });
+        const selection = window.getSelection();
+        const live = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        // 优先真实光标;没有(刚点过「引用素材」行)就回落到记住的偏移,再退到末尾
+        const range = live && editor.contains(live.startContainer)
+            ? live.cloneRange()
+            : rangeAtOffset(editor, caretOffsetRef.current ?? serializeEditor(editor).length);
         // 删除光标前未完成的 @query 文本
-        if (selection?.rangeCount) {
-            const range = selection.getRangeAt(0);
-            const probe = document.createRange();
-            probe.selectNodeContents(editor);
+        const probe = document.createRange();
+        probe.selectNodeContents(editor);
+        try {
             probe.setEnd(range.startContainer, range.startOffset);
-            const match = /@([^\s@]*)$/.exec(probe.toString());
-            if (match && range.startContainer.nodeType === Node.TEXT_NODE) {
-                range.setStart(range.startContainer, Math.max(0, range.startOffset - match[0].length));
-                range.deleteContents();
-            }
+        } catch {
+            probe.selectNodeContents(editor);
+            probe.collapse(false);
+        }
+        const match = /@([^\s@]*)$/.exec(probe.toString());
+        range.deleteContents();
+        if (match && range.startContainer.nodeType === Node.TEXT_NODE) {
+            range.setStart(range.startContainer, Math.max(0, range.startOffset - match[0].length));
+            range.deleteContents();
         }
         const chip = createChip(item, ctx, setPreviewUrl);
         const space = document.createTextNode(" ");
-        if (selection?.rangeCount) {
-            const range = selection.getRangeAt(0);
-            range.insertNode(space);
-            range.insertNode(chip);
-            range.setStartAfter(space);
-            range.collapse(true);
-            selection.removeAllRanges();
-            selection.addRange(range);
-        } else {
-            editor.append(chip, space);
-        }
+        const fragment = document.createDocumentFragment();
+        fragment.append(chip, space);
+        range.insertNode(fragment);
+        const caret = document.createRange();
+        caret.setStartAfter(space);
+        caret.collapse(true);
+        selection?.removeAllRanges();
+        selection?.addRange(caret);
+        caretOffsetRef.current = offsetOfRange(editor, caret);
         closeMenu();
         emitNext(serializeEditor(editor));
     }
@@ -1058,6 +1144,32 @@ function MentionPromptInput({ value, onChange, items, ctx, style, placeholder }:
         if (document.activeElement === editor && value === lastEmittedRef.current) return;
         rebuild();
         lastEmittedRef.current = value;
+    });
+
+    // 记录光标位置:点「引用素材」行会让输入框失焦,靠这个偏移把标签插回原处
+    useEffect(() => {
+        const onSelectionChange = () => {
+            const editor = editorRef.current;
+            const selection = window.getSelection();
+            if (!editor || !selection?.rangeCount) return;
+            const range = selection.getRangeAt(0);
+            if (!range.collapsed || !editor.contains(range.startContainer)) return;
+            caretOffsetRef.current = offsetOfRange(editor, range);
+        };
+        document.addEventListener("selectionchange", onSelectionChange);
+        return () => document.removeEventListener("selectionchange", onSelectionChange);
+    }, []);
+
+    // 把插入能力交给父组件(「引用素材」行点击),按标签插入到光标处
+    useEffect(() => {
+        if (!inserter) return;
+        inserter.current = (token: string) => {
+            const item = byLabel.get(token);
+            if (item) insertChip(item);
+        };
+        return () => {
+            inserter.current = null;
+        };
     });
 
     return (
@@ -1287,6 +1399,8 @@ function WorkflowPanel({ ctx }: CanvasNodePanelProps) {
     const [catalog, setCatalog] = useState<WorkflowCatalog | null>(null);
     const [rules, setRules] = useState<Record<string, InputRule> | null>(null);
     const [prompt, setPrompt] = useState(() => String(meta.prompt ?? ""));
+    // 提示词输入框把「按标签插入到光标处」注册到这里:「引用素材」行点按走它,而不是追加到末尾
+    const mentionInserter = useRef<((token: string) => void) | null>(null);
     const [duration, setDuration] = useState(() => String(meta.wfDuration ?? ""));
     const [resolution, setResolution] = useState(() => String(meta.wfResolution ?? ""));
     const [seed, setSeed] = useState(() => String(meta.wfSeed ?? ""));
@@ -1465,8 +1579,12 @@ function WorkflowPanel({ ctx }: CanvasNodePanelProps) {
         ? Object.keys(activeRules).some((name) => name === "prompt" || (activeRules[name]?.type === "string" && name === "prompt_text"))
         : Boolean(!preset || preset.hasPrompt || preset.tts);
 
-    // 「引用素材」行点按:把标签追加到提示词末尾(光标处插入由输入框内的 @ 自动补全负责)
+    // 「引用素材」行点按:插入到提示词光标处(输入框未挂载时退化为追加到末尾)
     const appendMention = (token: string) => {
+        if (mentionInserter.current) {
+            mentionInserter.current(token);
+            return;
+        }
         const next = `${prompt}${prompt && !prompt.endsWith(" ") ? " " : ""}${token} `;
         setPrompt(next);
         patch({ prompt: next });
@@ -1561,6 +1679,7 @@ function WorkflowPanel({ ctx }: CanvasNodePanelProps) {
                                 onChange={(next) => { setPrompt(next); patch({ prompt: next }); }}
                                 items={mentionables}
                                 ctx={ctx}
+                                inserter={mentionInserter}
                                 style={s.prompt}
                                 placeholder={name === "prompt" ? "描述主体、动作、场景、镜头…,输入 @ 引用素材" : `输入 ${name},支持 @ 素材`}
                             />
@@ -1615,13 +1734,13 @@ function WorkflowPanel({ ctx }: CanvasNodePanelProps) {
             {(!preset || preset.hasPrompt) && !preset?.tts ? (
                 <>
                     <label style={s.label}>提示词</label>
-                    <MentionPromptInput value={prompt} onChange={(next) => { setPrompt(next); patch({ prompt: next }); }} items={mentionables} ctx={ctx} style={s.prompt} placeholder="描述主体、动作、场景、镜头…,输入 @ 引用素材" />
+                    <MentionPromptInput value={prompt} onChange={(next) => { setPrompt(next); patch({ prompt: next }); }} items={mentionables} ctx={ctx} inserter={mentionInserter} style={s.prompt} placeholder="描述主体、动作、场景、镜头…,输入 @ 引用素材" />
                 </>
             ) : null}
             {preset?.tts ? (
                 <>
                     <label style={s.label}>合成文本(prompt_text)</label>
-                    <MentionPromptInput value={prompt} onChange={(next) => { setPrompt(next); patch({ prompt: next }); }} items={mentionables} ctx={ctx} style={s.prompt} placeholder="要朗读的文本…" />
+                    <MentionPromptInput value={prompt} onChange={(next) => { setPrompt(next); patch({ prompt: next }); }} items={mentionables} ctx={ctx} inserter={mentionInserter} style={s.prompt} placeholder="要朗读的文本…" />
                 </>
             ) : null}
                 </>
