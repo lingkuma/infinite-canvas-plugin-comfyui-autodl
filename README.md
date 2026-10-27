@@ -3,9 +3,13 @@
 在画布里调用 [AutoDL.Art ComfyUI 工作流 API](https://autodl.art/docs/comfyui_api/) 生图/生视频:节点上配置令牌与工作流 ID,提交任务、自动轮询,结果(图片/视频 URL)写回节点,并可作为下游节点的输入资源。
 
 ## 使用
-
-1. 到 [令牌管理](https://autodl.art/large-model/tokens) 创建令牌,**分组选 ComfyUI**。
-2. 画布新建「ComfyUI 工作流」节点(🧩),点击打开面板:
+1. 安装 cors 插件，允许跨域请求。 必须装，否则安装不上插件。
+	- [Allow CORS: Access-Control-Allow-Origin - Chrome Web Store](https://chromewebstore.google.com/detail/allow-cors-access-control/lhobafahddgcelffkeicbaginigeejlf)
+2. 插件安装地址 
+	- 右上角，插件，导入第三方插件。
+	- `https://github.com/lingkuma/infinite-canvas-plugin-comfyui-autodl/raw/refs/heads/dev/dist/infinite-canvas-plugin-comfyui-autodl.js`
+3. 到 [令牌管理](https://autodl.art/large-model/tokens) 创建令牌,**分组选 ComfyUI**。
+4. 画布新建「ComfyUI 工作流」节点(🧩),点击打开面板:
    - 填 Token(仅存本机插件存储 `ctx.storage`,不写入画布数据);
    - 填工作流 ID,如 `minimax_h3_lightx2v_no_pic`(点开工作流右侧抽屉可见);
    - 写提示词;额外参数(JSON)以各工作流「在线调用 API」弹窗为准;
