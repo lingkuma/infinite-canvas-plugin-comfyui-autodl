@@ -1,5 +1,12 @@
 # Agent 指南
 
+
+## 构建
+
+- 修改 `src/` 下的代码后,必须执行 `npm run build` 重新构建 `dist/`,否则插件运行时不会生效。
+- 构建完成后确认 `dist/` 已更新。
+- 注意版本自动更新
+
 ## 项目结构
 
 ```
@@ -34,8 +41,3 @@ infinite-canvas-plugin-comfyui-autodl/
 | `skills/autodl-comfyui-video/` | 外部 Agent | 把插件能力抽成命令行技能,`scripts/autodl_comfyui.py` 直接调 AutoDL 接口(`list` / `describe` / `generate`),不需要画布,结果下载到本地。 |
 | `mcp/` | 外部 Agent | 说明怎么把 Agent 接进无限画布(`@basketikun/canvas-agent` 的 MCP / `POST /api/tools`),以及如何建/配 `comfyui-autodl:workflow` 插件节点(含 metadata 字段表与坑位)。 |
 
-## 构建
-
-- 修改 `src/` 下的代码后,必须执行 `npm run build` 重新构建 `dist/`,否则插件运行时不会生效。
-- 构建完成后确认 `dist/` 已更新。
-- 注意版本自动更新
