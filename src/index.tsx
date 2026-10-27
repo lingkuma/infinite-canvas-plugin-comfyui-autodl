@@ -590,6 +590,12 @@ function findDynamic(catalog: WorkflowCatalog | null, workflowId: string): Dynam
     return catalog?.workflows.find((item) => item.id === workflowId);
 }
 
+// 下拉选项统一显示「名称(真实 ID)」,避免只有中文/别名时看不到实际工作流 ID
+function optionLabel(item: { id: string; label?: string }): string {
+    const name = (item.label || "").trim();
+    return name && name !== item.id ? `${name}(${item.id})` : item.id;
+}
+
 async function submitTask(apiBase: string, workflowId: string, body: Record<string, unknown>, token: string, signal: AbortSignal): Promise<string> {
     const response = await fetch(`${apiBase}/api/v1/comfyui/comfyui_workflow/${encodeURIComponent(workflowId)}`, {
         method: "POST",
@@ -1475,12 +1481,12 @@ function WorkflowPanel({ ctx }: CanvasNodePanelProps) {
                     <select value={workflowId} onChange={(e) => selectWorkflow(e.target.value)} style={s.pill}>
                         <option value="">自定义(手填 ID)</option>
                         {(catalog?.workflows ?? WORKFLOWS.map((preset) => ({ id: preset.id, label: preset.label }))).map((item) => (
-                            <option key={item.id} value={item.id}>{item.label}</option>
+                            <option key={item.id} value={item.id}>{optionLabel(item)}</option>
                         ))}
                     </select>
                     <div style={{ ...s.hint, marginTop: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
                         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {workflowId || "未选择"}{dynamicEntry?.description ? ` · ${dynamicEntry.description.slice(0, 60)}…` : ""}
+                            {workflowId ? optionLabel({ id: workflowId, label: dynamicEntry?.label ?? findPreset(workflowId)?.label }) : "未选择"}{dynamicEntry?.description ? ` · ${dynamicEntry.description.slice(0, 60)}…` : ""}
                         </span>
                         <span
                             role="button"
@@ -1732,7 +1738,7 @@ function WorkflowPanel({ ctx }: CanvasNodePanelProps) {
 export default definePlugin({
     id: "comfyui-autodl",
     name: "AutoDL ComfyUI 工作流",
-    version: "1.4.4",
+    version: "1.4.5",
     description: "调用 AutoDL.Art ComfyUI 工作流:内置 H3 文生/多图参考/首尾帧/对口型视频与 IndexTTS2 语音合成预设,参考素材从上游连线自动收集。",
     css: SPINNER_CSS,
     nodes: [
